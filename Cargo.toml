@@ -43,6 +43,9 @@ crate-type = ["cdylib", "rlib"]
 name = "accuracy_reports"
 required-features = ["accuracy-reports"]
 
+[[bin]]
+name = "bench"
+
 [dependencies]
 fraction = "0.10"
 include_dir = "0.7"

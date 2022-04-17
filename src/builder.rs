@@ -29,7 +29,6 @@ pub(crate) const MINIMUM_RELATIVE_DISTANCE_MESSAGE: &str =
 pub struct LanguageDetectorBuilder {
     languages: HashSet<Language>,
     minimum_relative_distance: f64,
-    is_every_language_model_preloaded: bool,
 }
 
 impl LanguageDetectorBuilder {
@@ -151,25 +150,12 @@ impl LanguageDetectorBuilder {
         self
     }
 
-    /// Configures `LanguageDetectorBuilder` to preload all language models when creating
-    /// the instance of [LanguageDetector].
-    ///
-    /// By default, *Lingua* uses lazy-loading to load only those language models
-    /// on demand which are considered relevant by the rule-based filter engine.
-    /// For web services, for instance, it is rather beneficial to preload all language
-    /// models into memory to avoid unexpected latency while waiting for the
-    /// service response. This method allows to switch between these two loading modes.
-    pub fn with_preloaded_language_models(&mut self) -> &mut Self {
-        self.is_every_language_model_preloaded = true;
-        self
-    }
 
     /// Creates and returns the configured instance of [LanguageDetector].
     pub fn build(&mut self) -> LanguageDetector {
         LanguageDetector::from(
             self.languages.clone(),
             self.minimum_relative_distance,
-            self.is_every_language_model_preloaded,
         )
     }
 
@@ -177,7 +163,6 @@ impl LanguageDetectorBuilder {
         Self {
             languages,
             minimum_relative_distance: 0.0,
-            is_every_language_model_preloaded: false,
         }
     }
 }

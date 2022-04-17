@@ -25,25 +25,29 @@ use crate::model::TrainingDataLanguageModel;
 use crate::model::{LanguageModel, TestDataLanguageModel};
 use crate::ngram::Ngram;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::str::FromStr;
-use std::sync::RwLock;
 use strum::IntoEnumIterator;
 
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 type BoxedLanguageModel = Box<dyn LanguageModel + Send + Sync>;
-type LazyLanguageModelMap = Lazy<RwLock<HashMap<Language, BoxedLanguageModel>>>;
-type StaticLanguageModelMap = &'static RwLock<HashMap<Language, BoxedLanguageModel>>;
 
-static UNIGRAM_MODELS: LazyLanguageModelMap = Lazy::new(|| RwLock::new(HashMap::new()));
-static BIGRAM_MODELS: LazyLanguageModelMap = Lazy::new(|| RwLock::new(HashMap::new()));
-static TRIGRAM_MODELS: LazyLanguageModelMap = Lazy::new(|| RwLock::new(HashMap::new()));
-static QUADRIGRAM_MODELS: LazyLanguageModelMap = Lazy::new(|| RwLock::new(HashMap::new()));
-static FIVEGRAM_MODELS: LazyLanguageModelMap = Lazy::new(|| RwLock::new(HashMap::new()));
+fn load_language_models(
+    language_models: &mut HashMap<Language, BoxedLanguageModel>,
+    language: &Language,
+    ngram_length: usize,
+) {
+    let json = load_json(language.clone(), ngram_length);
+    if let Ok(json_content) = json {
+        language_models.insert(
+            language.clone(),
+            Box::new(TrainingDataLanguageModel::from_json(&json_content)),
+        );
+    }
+}
 
 /// This struct detects the language of given input text.
 pub struct LanguageDetector {
@@ -51,18 +55,17 @@ pub struct LanguageDetector {
     minimum_relative_distance: f64,
     languages_with_unique_characters: HashSet<Language>,
     one_language_alphabets: HashMap<Alphabet, Language>,
-    unigram_language_models: StaticLanguageModelMap,
-    bigram_language_models: StaticLanguageModelMap,
-    trigram_language_models: StaticLanguageModelMap,
-    quadrigram_language_models: StaticLanguageModelMap,
-    fivegram_language_models: StaticLanguageModelMap,
+    unigram_language_models:HashMap<Language, BoxedLanguageModel>,
+    bigram_language_models: HashMap<Language, BoxedLanguageModel>,
+    trigram_language_models:HashMap<Language, BoxedLanguageModel>,
+    quadrigram_language_models: HashMap<Language, BoxedLanguageModel>,
+    fivegram_language_models: HashMap<Language, BoxedLanguageModel>,
 }
 
 impl LanguageDetector {
     pub(crate) fn from(
         languages: HashSet<Language>,
-        minimum_relative_distance: f64,
-        is_every_language_model_preloaded: bool,
+        minimum_relative_distance: f64
     ) -> Self {
         let languages_with_unique_characters = languages
             .iter()
@@ -79,33 +82,26 @@ impl LanguageDetector {
             minimum_relative_distance,
             languages_with_unique_characters,
             one_language_alphabets,
-            unigram_language_models: &UNIGRAM_MODELS,
-            bigram_language_models: &BIGRAM_MODELS,
-            trigram_language_models: &TRIGRAM_MODELS,
-            quadrigram_language_models: &QUADRIGRAM_MODELS,
-            fivegram_language_models: &FIVEGRAM_MODELS,
+            unigram_language_models: HashMap::new(),
+            bigram_language_models: HashMap::new(),
+            trigram_language_models: HashMap::new(),
+            quadrigram_language_models: HashMap::new(),
+            fivegram_language_models: HashMap::new(),
         };
 
-        if is_every_language_model_preloaded {
-            detector.preload_language_models(&languages);
-        }
-
+        detector.preload_language_models(&languages);
         detector
     }
 
     fn preload_language_models(&mut self, languages: &HashSet<Language>) {
-        #[cfg(not(target_family = "wasm"))]
-        let languages_iter = languages.par_iter();
-        #[cfg(target_family = "wasm")]
-        let languages_iter = languages.iter();
+        for language in languages.iter() {
+            load_language_models(&mut self.unigram_language_models, language, 1);
+            load_language_models(&mut self.bigram_language_models, language, 2);
+            load_language_models(&mut self.trigram_language_models, language, 3);
+            load_language_models(&mut self.quadrigram_language_models, language, 4);
+            load_language_models(&mut self.fivegram_language_models, language, 5);
 
-        languages_iter.for_each(|language| {
-            self.load_language_models(self.unigram_language_models, language, 1);
-            self.load_language_models(self.bigram_language_models, language, 2);
-            self.load_language_models(self.trigram_language_models, language, 3);
-            self.load_language_models(self.quadrigram_language_models, language, 4);
-            self.load_language_models(self.fivegram_language_models, language, 5);
-        });
+        }
     }
 
     /// Detects the language of given input text.
@@ -196,11 +192,8 @@ impl LanguageDetector {
         let ngram_length_range_iter = ngram_length_range.into_iter();
 
         #[allow(clippy::type_complexity)]
-        let all_probabilities_and_unigram_counts: Vec<(
-            HashMap<Language, f64>,
-            Option<HashMap<Language, u32>>,
-        )> = ngram_length_range_iter
-            .filter(|i| character_count >= *i)
+        let all_probabilities_and_unigram_counts: Vec<(HashMap<Language, f64>, Option<HashMap<Language, u32>>, )> =
+            ngram_length_range_iter.filter(|i| character_count >= *i)
             .map(|ngram_length| {
                 self.look_up_language_models(&cleaned_up_text, ngram_length, &filtered_languages)
             })
@@ -478,7 +471,7 @@ impl LanguageDetector {
             } else {
                 filtered_languages.clone()
             };
-            Some(self.count_unigrams(&test_data_model, &intersected_languages))
+            Some(self.count_unigrams(&test_data_model, ngram_length,  &intersected_languages))
         } else {
             None
         };
@@ -493,7 +486,8 @@ impl LanguageDetector {
     ) -> HashMap<Language, f64> {
         let mut probabilities = hashmap!();
         for language in filtered_languages.iter() {
-            let sum = self.compute_sum_of_ngram_probabilities(language, &model.ngrams);
+            let language_models = self.get_language_models(&language);
+            let sum = self.compute_sum_of_ngram_probabilities(&language_models, &model.ngrams);
             if sum < 0.0 {
                 probabilities.insert(language.clone(), sum);
             }
@@ -532,56 +526,64 @@ impl LanguageDetector {
 
     fn compute_sum_of_ngram_probabilities(
         &self,
-        language: &Language,
+        language_models: &[Option<&BoxedLanguageModel>; 5],
         ngrams: &HashSet<Ngram>,
     ) -> f64 {
         let mut sum = 0.0;
         for ngram in ngrams.iter() {
             for elem in ngram.range_of_lower_order_ngrams() {
-                let probability = self.look_up_ngram_probability(language, &elem);
-
-                if probability > 0.0 {
-                    sum += probability.ln();
-                    break;
+                if let Some(language_model) = language_models[elem.value.chars().count() - 1] {
+                    let probability = language_model.get_relative_frequency(&elem);
+                    if probability > 0.0 {
+                        sum += probability.ln();
+                        break;
+                    }
                 }
             }
         }
         sum
     }
 
-    fn look_up_ngram_probability(&self, language: &Language, ngram: &Ngram) -> f64 {
-        let ngram_length = ngram.value.chars().count();
-        let language_models = match ngram_length {
-            5 => self.fivegram_language_models,
-            4 => self.quadrigram_language_models,
-            3 => self.trigram_language_models,
-            2 => self.bigram_language_models,
-            1 => self.unigram_language_models,
+
+    fn get_language_models(&self, language: &Language) -> [Option<&BoxedLanguageModel>; 5] {
+        [
+            self.get_language_model(language, 1),
+            self.get_language_model(language, 2),
+            self.get_language_model(language, 3),
+            self.get_language_model(language, 4),
+            self.get_language_model(language, 5),
+        ]
+    }
+
+    fn get_language_model(&self, language: &Language, ngram_length: usize) -> Option<&BoxedLanguageModel> {
+        let language_models: &HashMap<Language, BoxedLanguageModel> = match ngram_length {
+            5 => &self.fivegram_language_models,
+            4 => &self.quadrigram_language_models,
+            3 => &self.trigram_language_models,
+            2 => &self.bigram_language_models,
+            1 => &self.unigram_language_models,
             0 => panic!("zerogram detected"),
             _ => panic!(
                 "unsupported ngram length detected: {}",
-                ngram.value.chars().count()
+                ngram_length
             ),
         };
-
-        self.load_language_models(language_models, language, ngram_length);
-
-        match language_models.read().unwrap().get(language) {
-            Some(model) => model.get_relative_frequency(ngram),
-            None => 0.0,
-        }
+        language_models.get(language)
     }
 
     fn count_unigrams(
         &self,
         unigram_model: &TestDataLanguageModel,
+        ngram_length: usize,
         filtered_languages: &HashSet<Language>,
     ) -> HashMap<Language, u32> {
         let mut unigram_counts = HashMap::new();
         for language in filtered_languages.iter() {
-            for unigram in unigram_model.ngrams.iter() {
-                if self.look_up_ngram_probability(language, unigram) > 0.0 {
-                    self.increment_counter(&mut unigram_counts, language.clone());
+            if let Some(language_model) = self.get_language_model(language, ngram_length) {
+                for unigram in unigram_model.ngrams.iter() {
+                    if language_model.get_relative_frequency(unigram) > 0.0 {
+                        self.increment_counter(&mut unigram_counts, language.clone());
+                    }
                 }
             }
         }
@@ -618,25 +620,6 @@ impl LanguageDetector {
         summed_up_probabilities
     }
 
-    fn load_language_models(
-        &self,
-        language_models: StaticLanguageModelMap,
-        language: &Language,
-        ngram_length: usize,
-    ) {
-        let models = language_models.read().unwrap();
-        if !models.contains_key(language) {
-            std::mem::drop(models);
-            let mut models = language_models.write().unwrap();
-            let json = load_json(language.clone(), ngram_length);
-            if let Ok(json_content) = json {
-                models.insert(
-                    language.clone(),
-                    Box::new(TrainingDataLanguageModel::from_json(&json_content)),
-                );
-            }
-        }
-    }
 
     fn increment_counter<T: Eq + Hash>(&self, counts: &mut HashMap<T, u32>, key: T) {
         let counter = counts.entry(key).or_insert(0);
@@ -651,7 +634,6 @@ mod tests {
     use crate::model::MockLanguageModel;
     use crate::LanguageDetectorBuilder;
     use float_cmp::approx_eq;
-    use once_cell::sync::OnceCell;
     use rstest::*;
 
     // ##############################
@@ -794,75 +776,57 @@ mod tests {
     fn unigram_language_models(
         unigram_language_model_for_english: BoxedLanguageModel,
         unigram_language_model_for_german: BoxedLanguageModel,
-    ) -> StaticLanguageModelMap {
-        static UNIGRAM_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        UNIGRAM_MODELS_FIXTURE.get_or_init(|| {
-            RwLock::new(hashmap!(
+    ) -> HashMap<Language, BoxedLanguageModel> {
+        hashmap!(
                 English => unigram_language_model_for_english,
                 German => unigram_language_model_for_german
-            ))
-        })
+            )
     }
 
     #[fixture]
     fn bigram_language_models(
         bigram_language_model_for_english: BoxedLanguageModel,
         bigram_language_model_for_german: BoxedLanguageModel,
-    ) -> StaticLanguageModelMap {
-        static BIGRAM_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        BIGRAM_MODELS_FIXTURE.get_or_init(|| {
-            RwLock::new(hashmap!(
+    ) -> HashMap<Language, BoxedLanguageModel> {
+        hashmap!(
                 English => bigram_language_model_for_english,
                 German => bigram_language_model_for_german
-            ))
-        })
+            )
     }
 
     #[fixture]
     fn trigram_language_models(
         trigram_language_model_for_english: BoxedLanguageModel,
         trigram_language_model_for_german: BoxedLanguageModel,
-    ) -> StaticLanguageModelMap {
-        static TRIGRAM_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        TRIGRAM_MODELS_FIXTURE.get_or_init(|| {
-            RwLock::new(hashmap!(
+    ) -> HashMap<Language, BoxedLanguageModel> {
+        hashmap!(
                 English => trigram_language_model_for_english,
                 German => trigram_language_model_for_german
-            ))
-        })
+            )
     }
 
     #[fixture]
     fn quadrigram_language_models(
         quadrigram_language_model_for_english: BoxedLanguageModel,
         quadrigram_language_model_for_german: BoxedLanguageModel,
-    ) -> StaticLanguageModelMap {
-        static QUADRIGRAM_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        QUADRIGRAM_MODELS_FIXTURE.get_or_init(|| {
-            RwLock::new(hashmap!(
+    ) -> HashMap<Language, BoxedLanguageModel> {
+            hashmap!(
                 English => quadrigram_language_model_for_english,
                 German => quadrigram_language_model_for_german
-            ))
-        })
+            )
+        
     }
 
     #[fixture]
     fn fivegram_language_models(
         fivegram_language_model_for_english: BoxedLanguageModel,
         fivegram_language_model_for_german: BoxedLanguageModel,
-    ) -> StaticLanguageModelMap {
-        static FIVEGRAM_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        FIVEGRAM_MODELS_FIXTURE.get_or_init(|| {
-            RwLock::new(hashmap!(
+    ) -> HashMap<Language, BoxedLanguageModel> {
+            hashmap!(
                 English => fivegram_language_model_for_english,
                 German => fivegram_language_model_for_german
-            ))
-        })
+            )
+        
     }
 
     // ##############################
@@ -870,10 +834,8 @@ mod tests {
     // ##############################
 
     #[fixture]
-    fn empty_language_models() -> StaticLanguageModelMap {
-        static EMPTY_MODELS_FIXTURE: OnceCell<RwLock<HashMap<Language, BoxedLanguageModel>>> =
-            OnceCell::new();
-        EMPTY_MODELS_FIXTURE.get_or_init(|| RwLock::new(hashmap!()))
+    fn empty_language_models() -> HashMap<Language, BoxedLanguageModel> {
+        HashMap::new()
     }
 
     // ##############################
@@ -896,11 +858,11 @@ mod tests {
 
     #[fixture]
     fn detector_for_english_and_german(
-        unigram_language_models: StaticLanguageModelMap,
-        bigram_language_models: StaticLanguageModelMap,
-        trigram_language_models: StaticLanguageModelMap,
-        quadrigram_language_models: StaticLanguageModelMap,
-        fivegram_language_models: StaticLanguageModelMap,
+        unigram_language_models: HashMap<Language, BoxedLanguageModel>,
+        bigram_language_models: HashMap<Language, BoxedLanguageModel>,
+        trigram_language_models: HashMap<Language, BoxedLanguageModel>,
+        quadrigram_language_models: HashMap<Language, BoxedLanguageModel>,
+        fivegram_language_models: HashMap<Language, BoxedLanguageModel>,
     ) -> LanguageDetector {
         LanguageDetector {
             languages: hashset!(English, German),
@@ -917,7 +879,7 @@ mod tests {
 
     #[fixture]
     fn detector_for_all_languages(
-        empty_language_models: StaticLanguageModelMap,
+        empty_language_models: HashMap<Language, BoxedLanguageModel>,
     ) -> LanguageDetector {
         let languages = Language::all();
         let languages_with_unique_characters = languages
@@ -936,11 +898,11 @@ mod tests {
             minimum_relative_distance: 0.0,
             languages_with_unique_characters,
             one_language_alphabets,
-            unigram_language_models: empty_language_models,
-            bigram_language_models: empty_language_models,
-            trigram_language_models: empty_language_models,
-            quadrigram_language_models: empty_language_models,
-            fivegram_language_models: empty_language_models,
+            unigram_language_models: HashMap::new(),
+            bigram_language_models: HashMap::new(),
+            trigram_language_models: HashMap::new(),
+            quadrigram_language_models: HashMap::new(),
+            fivegram_language_models: HashMap::new(),
         }
     }
 
@@ -1006,7 +968,9 @@ mod tests {
         expected_probability: f64,
     ) {
         let probability = detector_for_english_and_german
-            .look_up_ngram_probability(&language, &Ngram::new(ngram));
+            .get_language_model(&language, ngram.chars().count())
+            .unwrap()
+            .get_relative_frequency(&Ngram::new(ngram));
         assert_eq!(
             probability, expected_probability,
             "expected probability {} for language '{:?}' and ngram '{}', got {}",
@@ -1019,7 +983,10 @@ mod tests {
     fn assert_ngram_probability_lookup_does_not_work_for_zerogram(
         detector_for_english_and_german: LanguageDetector,
     ) {
-        detector_for_english_and_german.look_up_ngram_probability(&English, &Ngram::new(""));
+        detector_for_english_and_german
+            .get_language_model(&English, 0)
+            .unwrap()
+            .get_relative_frequency(&Ngram::new(""));
     }
 
     #[rstest(
@@ -1049,8 +1016,9 @@ mod tests {
             .map(|&it| Ngram::new(it))
             .collect::<HashSet<_>>();
 
+        let language_models = detector_for_english_and_german.get_language_models(&English);
         let sum_of_probabilities = detector_for_english_and_german
-            .compute_sum_of_ngram_probabilities(&English, &mapped_ngrams);
+            .compute_sum_of_ngram_probabilities(&language_models, &mapped_ngrams);
 
         assert!(
             approx_eq!(
@@ -1475,7 +1443,6 @@ mod tests {
     )]
     fn assert_language_detection_is_deterministic(text: &str, languages: Vec<Language>) {
         let detector = LanguageDetectorBuilder::from_languages(&languages)
-            .with_preloaded_language_models()
             .build();
         let mut detected_languages = hashset!();
         for _ in 0..100 {
