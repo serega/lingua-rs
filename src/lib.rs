@@ -215,19 +215,6 @@
 //! returned vector will be empty. The confidence value for each language not being part of the
 //! returned vector is assumed to be 0.0.
 //!
-//! ### 7.4 Eager loading versus lazy loading
-//!
-//! By default, *Lingua* uses lazy-loading to load only those language models on demand which are
-//! considered relevant by the rule-based filter engine. For web services, for instance, it is
-//! rather beneficial to preload all language models into memory to avoid unexpected latency while
-//! waiting for the service response. If you want to enable the eager-loading mode, you can do it
-//! like this:
-//!
-//! ```
-//! use lingua::LanguageDetectorBuilder;
-//!
-//! LanguageDetectorBuilder::from_all_languages().with_preloaded_language_models().build();
-//! ```
 //!
 //! Multiple instances of `LanguageDetector` share the same language models in memory which are
 //! accessed asynchronously by the instances.
