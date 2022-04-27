@@ -23,7 +23,7 @@ use crate::json::load_json;
 use crate::language::Language;
 use crate::model::TrainingDataLanguageModel;
 use crate::model::{LanguageModel, TestDataLanguageModel};
-use crate::ngram::Ngram;
+use crate::ngram::{NgramRef};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -59,7 +59,7 @@ pub struct LanguageDetector {
     bigram_language_models: HashMap<Language, BoxedLanguageModel>,
     trigram_language_models:HashMap<Language, BoxedLanguageModel>,
     quadrigram_language_models: HashMap<Language, BoxedLanguageModel>,
-    fivegram_language_models: HashMap<Language, BoxedLanguageModel>,
+    fivegram_language_models: HashMap<Language, BoxedLanguageModel>
 }
 
 impl LanguageDetector {
@@ -245,6 +245,7 @@ impl LanguageDetector {
             vec![normalized_text]
         }
     }
+
 
     fn is_logogram(&self, chr: char) -> bool {
         if chr.is_whitespace() {
@@ -527,13 +528,13 @@ impl LanguageDetector {
     fn compute_sum_of_ngram_probabilities(
         &self,
         language_models: &[Option<&BoxedLanguageModel>; 5],
-        ngrams: &HashSet<Ngram>,
+        ngrams: &HashSet<NgramRef>,
     ) -> f64 {
         let mut sum = 0.0;
         for ngram in ngrams.iter() {
             for elem in ngram.range_of_lower_order_ngrams() {
-                if let Some(language_model) = language_models[elem.value.chars().count() - 1] {
-                    let probability = language_model.get_relative_frequency(&elem);
+                if let Some(language_model) = language_models[elem.chars().count() - 1] {
+                    let probability = language_model.get_relative_frequency_str(elem);
                     if probability > 0.0 {
                         sum += probability.ln();
                         break;
@@ -581,7 +582,7 @@ impl LanguageDetector {
         for language in filtered_languages.iter() {
             if let Some(language_model) = self.get_language_model(language, ngram_length) {
                 for unigram in unigram_model.ngrams.iter() {
-                    if language_model.get_relative_frequency(unigram) > 0.0 {
+                    if language_model.get_relative_frequency_str(unigram.value) > 0.0 {
                         self.increment_counter(&mut unigram_counts, language.clone());
                     }
                 }
@@ -635,6 +636,7 @@ mod tests {
     use crate::LanguageDetectorBuilder;
     use float_cmp::approx_eq;
     use rstest::*;
+    use crate::ngram::{Ngram, NgramRef};
 
     // ##############################
     // MOCKS
@@ -646,6 +648,10 @@ mod tests {
             mock.expect_get_relative_frequency()
                 .withf(move |n| n == &Ngram::new(ngram))
                 .return_const(probability);
+            mock.expect_get_relative_frequency_str()
+                .withf(move |n| n == ngram)
+                .return_const(probability);
+
         }
         Box::new(mock)
     }
@@ -843,10 +849,10 @@ mod tests {
     // ##############################
 
     #[fixture(strs=hashset!())]
-    fn test_data_model(strs: HashSet<&'static str>) -> TestDataLanguageModel {
+    fn test_data_model(strs: HashSet<&'static str>) -> TestDataLanguageModel<'static> {
         let ngrams = strs
             .iter()
-            .map(|&it| Ngram::new(it))
+            .map(|&it| NgramRef::new(it))
             .collect::<HashSet<_>>();
 
         TestDataLanguageModel { ngrams }
@@ -1013,7 +1019,7 @@ mod tests {
     ) {
         let mapped_ngrams = ngrams
             .iter()
-            .map(|&it| Ngram::new(it))
+            .map(|&it| NgramRef::new(it))
             .collect::<HashSet<_>>();
 
         let language_models = detector_for_english_and_german.get_language_models(&English);

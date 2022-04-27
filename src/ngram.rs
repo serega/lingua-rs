@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-use itertools::Itertools;
+use std::borrow::Borrow;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::fmt::Display;
+
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct Ngram {
@@ -52,7 +53,7 @@ impl Ngram {
 
     pub(crate) fn range_of_lower_order_ngrams(&self) -> NgramRange {
         NgramRange {
-            start: self.clone(),
+            start: self.value.as_str()
         }
     }
 }
@@ -89,27 +90,68 @@ impl<'de> Deserialize<'de> for Ngram {
     }
 }
 
-pub(crate) struct NgramRange {
-    start: Ngram,
+// Similar to Ngram, but instead of String uses &str to avoid allocations
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct NgramRef<'a> {
+    pub(crate) value: &'a str,
 }
 
-impl Iterator for NgramRange {
-    type Item = Ngram;
+impl<'a> NgramRef<'a> {
+    pub(crate) fn new(value: &'a str) -> Self {
+        let char_count = value.chars().count();
+        if !(0..6).contains(&char_count) {
+            panic!(
+                "length {} of ngram '{}' is not in range 0..6",
+                char_count, value
+            );
+        }
+        Self {
+            value: value
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let value = &self.start.value;
-        let length = value.chars().count();
-        if length == 0 {
-            None
-        } else {
-            let result = Some(self.start.clone());
-            let chars = value.chars().collect_vec();
-            let new_value = &chars[0..length - 1].iter().collect::<String>();
-            self.start = Ngram::new(new_value);
-            result
+    pub(crate) fn range_of_lower_order_ngrams(&self) -> NgramRange {
+        NgramRange {
+            start: self.value
         }
     }
 }
+
+impl<'a> Display for NgramRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+
+pub(crate) struct NgramRange<'a> {
+    start: &'a str,
+}
+
+impl<'a> Iterator for NgramRange<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.start.char_indices().last() {
+            Some(last_index) => {
+                let result = Some(self.start);
+                let new_value = &self.start[0..last_index.0];
+                self.start = new_value;
+                result
+            }
+            None => None
+        }
+    }
+}
+
+// Allow lookup Ngram using str in a HashMap
+impl Borrow<str> for Ngram {
+    fn borrow(&self) -> &str {
+        self.value.as_str()
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -132,11 +174,13 @@ mod tests {
     fn test_ngram_iterator() {
         let ngram = Ngram::new("äbcde");
         let mut range = ngram.range_of_lower_order_ngrams();
-        assert_eq!(range.next(), Some(Ngram::new("äbcde")));
-        assert_eq!(range.next(), Some(Ngram::new("äbcd")));
-        assert_eq!(range.next(), Some(Ngram::new("äbc")));
-        assert_eq!(range.next(), Some(Ngram::new("äb")));
-        assert_eq!(range.next(), Some(Ngram::new("ä")));
+
+        assert_eq!(range.next(), Some("äbcde"));
+        assert_eq!(range.next(), Some("äbcd"));
+        assert_eq!(range.next(), Some("äbc"));
+        assert_eq!(range.next(), Some("äb"));
+        assert_eq!(range.next(), Some("ä"));
         assert_eq!(range.next(), None);
+
     }
 }
