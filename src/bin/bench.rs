@@ -179,13 +179,11 @@ fn main() {
 
 
     let lingua_detector = LanguageDetectorBuilder::from_all_languages()
-        .with_preloaded_language_models()
         .build();
-
 
     let mut all_examples = Vec::new();
     let mut counts: HashMap<Language, usize> = HashMap::new();
-    for (idx, language) in Language::iter().enumerate() {
+    for (_, language) in Language::iter().enumerate() {
         let single_words = get_file_content("single-words.txt", &language);
         let word_pairs = get_file_content("word-pairs.txt", &language);
         let sentences = get_file_content("sentences.txt", &language);
@@ -207,6 +205,5 @@ fn main() {
 
     println!("{}", now.elapsed().as_millis());
     println!("{:?}", counts);
-
 
 }
