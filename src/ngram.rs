@@ -19,11 +19,13 @@ use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::fmt::Display;
+use std::str::FromStr;
+use smol_str::SmolStr;
 
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct Ngram {
-    pub(crate) value: String,
+    pub(crate) value: SmolStr,
 }
 
 impl Ngram {
@@ -36,7 +38,7 @@ impl Ngram {
             );
         }
         Self {
-            value: value.to_string(),
+            value: SmolStr::from_str(value).unwrap(),
         }
     }
 
@@ -151,7 +153,6 @@ impl Borrow<str> for Ngram {
         self.value.as_str()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
